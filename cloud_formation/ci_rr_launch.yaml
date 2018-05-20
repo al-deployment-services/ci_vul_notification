@@ -1,0 +1,218 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CFT to launch Cloud Insight Remediation Report resources
+Parameters:
+  pProjectName:
+    Description: Prefix name that will be used across all resource name
+    AllowedPattern: "^[A-Za-z][A-Za-z0-9_-]*$"
+    ConstraintDescription: Project name must only contain alpha numeric, - and _
+    Type: String
+  pFrequency:
+    Description: How often the check should run (specify in hours)
+    Default: 24
+    Type: String
+  pDestS3Bucket:
+    Description: The S3 bucket name where you wish to store the output, leave it empty if you want to automatically create the S3 bucket
+    Type: String
+  pTTL:
+    Description: Attribute name for time to live settings, warning changing this may require update to DynamoDB and Lambda
+    Type: String
+    Default: 'TTL'
+  pAtRestEncryption:
+    Description: Set to True if you want to enable at rest encryption on S3 and DynamoDB
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+  pStandardBaseReadCapacity:
+    Description: DynamoDB minimum provisioned read capacity for non critical table
+    Type: String
+    Default: 5
+  pStandardBaseWriteCapacity:
+    Description: DynamoDB minimum provisioned write capacity for non critical table
+    Type: String
+    Default: 5
+  pBaseReadCapacity:
+    Description: DynamoDB table minimum provisioned read capacity
+    Type: String
+    Default: 50
+  pBaseWriteCapacity:
+    Description: DynamoDB table minimum provisioned write capacity
+    Type: String
+    Default: 50
+  pMaxReadCapacity:
+    Description: DynamoDB table maximum provisioned read capacity
+    Type: String
+    Default: 500
+  pMaxWriteCapacity:
+    Description: DynamoDB table maxium provisioned write capacity
+    Type: String
+    Default: 500
+  pLambdaInvokeMode:
+    Description: Lambda Invoke Mode (Event / RequestResponse)
+    Type: String
+    AllowedValues: [Event, RequestResponse]
+    Default: 'Event'
+  pLambdaPackages:
+    Description: Lambda package which implement the report
+    Default: "ci_rr_lambda.zip"
+    Type: String
+  pSourceS3Bucket:
+    Description: >
+      The prefix of the S3 bucket which contains Lambda package. Note that the name of the bucket must contain a region name suffix. The following is the valid backet name syntax: <bucket_name_prefix>.us-east-1.
+    Default: "al-deployment-services"
+    Type: String
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: "Project Configuration"
+        Parameters:
+          - pProjectName
+          - pDestS3Bucket
+          - pAtRestEncryption
+          - pFrequency
+      -
+        Label:
+          default: "DynamoDB Configuration"
+        Parameters:
+          - pStandardBaseReadCapacity
+          - pStandardBaseWriteCapacity
+          - pBaseReadCapacity
+          - pBaseWriteCapacity
+          - pMaxReadCapacity
+          - pMaxWriteCapacity
+          - pTTL
+      -
+        Label:
+          default: "Lambda Configuration"
+        Parameters:
+          - pLambdaInvokeMode
+          - pLambdaPackages
+          - pSourceS3Bucket
+    ParameterLabels:
+      pProjectName:
+        default: "Project Name"
+      pDestS3Bucket:
+        default: "Output S3 Bucket"
+      pAtRestEncryption:
+        default: "Encryption (at rest)"
+      pFrequency:
+        default: "Rate of checks"
+      pStandardBaseReadCapacity:
+        default: "Read capacity (non critical table)"
+      pStandardBaseWriteCapacity:
+        default: "Write capacity (non critical table)"
+      pBaseReadCapacity:
+        default: "Read capacity (critical table)"
+      pBaseWriteCapacity:
+        default: "Write capacity (critical table)"
+      pMaxReadCapacity:
+        default: "Max read capacity (all table)"
+      pMaxWriteCapacity:
+        default: "Max write capacity (all table)"
+      pTTL:
+        default: "TTL attribute name"
+      pLambdaInvokeMode:
+        default: "Invoke Mode"
+      pLambdaPackages:
+        default: "Package name"
+      pSourceS3Bucket:
+        default: "Source S3 Bucket"
+Conditions:
+  CreateBucket: !Equals
+    - ''
+    - !Ref pDestS3Bucket
+Mappings:
+  YarpMap:
+    ASHBURN:
+      "yarp": "api.cloudinsight.alertlogic.com"
+    DENVER:
+      "yarp": "api.cloudinsight.alertlogic.com"
+    NEWPORT:
+      "yarp": "api.cloudinsight.alertlogic.co.uk"
+Resources:
+  OutputBucket:
+    DeletionPolicy: Retain
+    Condition: CreateBucket
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: Private
+  DynamoDBStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        ProjectName: !Ref pProjectName
+        TTL: !Ref pTTL
+        AtRestEncryption: !Ref pAtRestEncryption
+        StandardBaseReadCapacity: !Ref pStandardBaseReadCapacity
+        StandardBaseWriteCapacity: !Ref pStandardBaseWriteCapacity
+        BaseReadCapacity: !Ref pBaseReadCapacity
+        BaseWriteCapacity: !Ref pBaseWriteCapacity
+        MaxReadCapacity: !Ref pMaxReadCapacity
+        MaxWriteCapacity: !Ref pMaxWriteCapacity
+      TemplateURL: !Join
+        - ''
+        - - "https://s3.amazonaws.com/"
+          - !Ref 'pSourceS3Bucket'
+          - "."
+          - !Ref 'AWS::Region'
+          - "/cloud_formations/ci_rr_launch_dynamodb_stack.yaml"
+  LambdaStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        pProjectName: !Ref pProjectName
+        pDestS3Bucket: !If [CreateBucket, !Ref 'OutputBucket', !Ref 'pDestS3Bucket']
+        pLambdaInvokeMode: !Ref pLambdaInvokeMode
+        pLambdaPackages: !Ref pLambdaPackages
+        pSourceS3Bucket: !Ref pSourceS3Bucket
+        pDynamoDBStack: !GetAtt [DynamoDBStack, Outputs.StackName]
+      TemplateURL: !Join
+        - ''
+        - - "https://s3.amazonaws.com/"
+          - !Ref 'pSourceS3Bucket'
+          - "."
+          - !Ref 'AWS::Region'
+          - "/cloud_formations/ci_rr_launch_lambda_stack.yaml"
+  ApiGatewayStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        pLambdaStack: !GetAtt [LambdaStack, Outputs.StackName]
+      TemplateURL: !Join
+        - ''
+        - - "https://s3.amazonaws.com/"
+          - !Ref 'pSourceS3Bucket'
+          - "."
+          - !Ref 'AWS::Region'
+          - "/cloud_formations/ci_rr_launch_api_gateway_stack.yaml"
+  EventStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        pLambdaStack: !GetAtt [LambdaStack, Outputs.StackName]
+        pFrequency: !Ref pFrequency
+      TemplateURL: !Join
+        - ''
+        - - "https://s3.amazonaws.com/"
+          - !Ref 'pSourceS3Bucket'
+          - "."
+          - !Ref 'AWS::Region'
+          - "/cloud_formations/ci_rr_launch_event_stack.yaml"
+
+Outputs:
+  OutputBucket:
+    Description: Output from the function will be made avalable in this S3 bucket.
+    Value: !Ref OutputBucket
+  OutputSNSTopic:
+    Description: SNS topic for output notification.
+    Value: !GetAtt LambdaStack.Outputs.OutputSNSTopic
+  APIUsagePlan:
+    Description: Please create API Key in this Usage Plan
+    Value: !GetAtt ApiGatewayStack.Outputs.APIUsagePlan
+  APIKey:
+    Description: From AWS Console copy the Key value from this API Key
+    Value: !GetAtt ApiGatewayStack.Outputs.APIKey
+  RegisterURL:
+    Description: Use this URL to register new CID
+    Value: !GetAtt ApiGatewayStack.Outputs.RegisterURL

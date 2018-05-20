@@ -1,0 +1,1073 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CFT to launch Cloud Insight Remediation Report DynamoDB resources
+Parameters:
+  ProjectName:
+    Description: Prefix name that will be used across all resource name
+    AllowedPattern: "^[A-Za-z][A-Za-z0-9_-]*$"
+    ConstraintDescription: Project name must only contain alpha numeric, - and _
+    Type: String
+  TTL:
+    Description: Attribute name for time to live settings, warning changing this may require update to DynamoDB and Lambda
+    Type: String
+    Default: 'TTL'
+  AtRestEncryption:
+    Description: Set to True if you want to enable at rest encryption on S3 and DynamoDB
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+  StandardBaseReadCapacity:
+    Description: DynamoDB minimum provisioned read capacity for non critical table
+    Type: String
+    Default: 5
+  StandardBaseWriteCapacity:
+    Description: DynamoDB minimum provisioned write capacity for non critical table
+    Type: String
+    Default: 5
+  BaseReadCapacity:
+    Description: DynamoDB table minimum provisioned read capacity
+    Type: String
+    Default: 50
+  BaseWriteCapacity:
+    Description: DynamoDB table minimum provisioned write capacity
+    Type: String
+    Default: 50
+  MaxReadCapacity:
+    Description: DynamoDB table maximum provisioned read capacity
+    Type: String
+    Default: 500
+  MaxWriteCapacity:
+    Description: DynamoDB table maxium provisioned write capacity
+    Type: String
+    Default: 500
+Resources:
+  CIDMap:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      TableName: !Join
+        - ''
+        - - !Ref 'ProjectName'
+          - '_'
+          - 'cid_map'
+      AttributeDefinitions:
+        -
+          AttributeName: "parent_cid"
+          AttributeType: "S"
+        -
+          AttributeName: "id"
+          AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "parent_cid"
+          KeyType: "HASH"
+        -
+          AttributeName: "id"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref 'StandardBaseReadCapacity'
+        WriteCapacityUnits: !Ref 'StandardBaseWriteCapacity'
+      SSESpecification:
+        SSEEnabled: !Ref 'AtRestEncryption'
+  CheckInMap:
+    Type: "AWS::DynamoDB::Table"
+    DependsOn: CIDMap
+    Properties:
+      TableName: !Join
+        - ''
+        - - !Ref 'ProjectName'
+          - '_'
+          - 'env_checkin_map'
+      AttributeDefinitions:
+        -
+          AttributeName: "id"
+          AttributeType: "S"
+        -
+          AttributeName: "date_marker"
+          AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "id"
+          KeyType: "HASH"
+        -
+          AttributeName: "date_marker"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref 'StandardBaseReadCapacity'
+        WriteCapacityUnits: !Ref 'StandardBaseWriteCapacity'
+      SSESpecification:
+        SSEEnabled: !Ref 'AtRestEncryption'
+      TimeToLiveSpecification:
+        AttributeName: !Ref 'TTL'
+        Enabled: True
+  EnvMap:
+    Type: "AWS::DynamoDB::Table"
+    DependsOn: CIDMap
+    Properties:
+      TableName: !Join
+        - ''
+        - - !Ref 'ProjectName'
+          - '_'
+          - 'env_map'
+      AttributeDefinitions:
+        -
+          AttributeName: "account_id"
+          AttributeType: "S"
+        -
+          AttributeName: "id"
+          AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "account_id"
+          KeyType: "HASH"
+        -
+          AttributeName: "id"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref 'StandardBaseReadCapacity'
+        WriteCapacityUnits: !Ref 'StandardBaseWriteCapacity'
+      SSESpecification:
+        SSEEnabled: !Ref 'AtRestEncryption'
+  ScalingRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-auto_scaling-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - application-autoscaling.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: "DynamoDBAutoScale"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowToAutoScaleDynamoDB
+                Effect: "Allow"
+                Action:
+                  - "dynamodb:DescribeTable"
+                  - "dynamodb:UpdateTable"
+                Resource: !Join
+                  - ''
+                  - - 'arn:aws:dynamodb'
+                    - ':'
+                    - !Ref 'AWS::Region'
+                    - ':'
+                    - !Ref 'AWS::AccountId'
+                    - ':'
+                    - 'table'
+                    - '/'
+                    - !Ref 'ProjectName'
+                    - '*'
+              - Sid: WriteCloudWatchAlarm
+                Effect: "Allow"
+                Action:
+                  - "cloudwatch:PutMetricAlarm"
+                  - "cloudwatch:DescribeAlarms"
+                  - "cloudwatch:GetMetricStatistics"
+                  - "cloudwatch:SetAlarmState"
+                  - "cloudwatch:DeleteAlarms"
+                Resource: '*'
+  RemMap:
+    Type: "AWS::DynamoDB::Table"
+    DependsOn: EnvMap
+    Properties:
+      TableName: !Join
+        - ''
+        - - !Ref 'ProjectName'
+          - '_'
+          - 'rem_map'
+      AttributeDefinitions:
+        -
+          AttributeName: "key"
+          AttributeType: "S"
+        -
+          AttributeName: "date_marker"
+          AttributeType: "S"
+        -
+          AttributeName: "deployment_id"
+          AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "key"
+          KeyType: "HASH"
+        -
+          AttributeName: "date_marker"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref 'BaseReadCapacity'
+        WriteCapacityUnits: !Ref 'BaseWriteCapacity'
+      SSESpecification:
+        SSEEnabled: !Ref 'AtRestEncryption'
+      TimeToLiveSpecification:
+        AttributeName: !Ref 'TTL'
+        Enabled: True
+      GlobalSecondaryIndexes:
+        -
+          IndexName: "deployment_id-date_marker-index"
+          KeySchema:
+            -
+              AttributeName: "deployment_id"
+              KeyType: "HASH"
+            -
+              AttributeName: "date_marker"
+              KeyType: "RANGE"
+          Projection:
+            ProjectionType: "KEYS_ONLY"
+          ProvisionedThroughput:
+            ReadCapacityUnits: !Ref 'BaseReadCapacity'
+            WriteCapacityUnits: !Ref 'BaseWriteCapacity'
+  RemMapWriteCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxWriteCapacity'
+      MinCapacity: !Ref 'BaseWriteCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref RemMap
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  RemMapWriteScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: RemMap
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref RemMapWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  RemMapIndexWriteCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxWriteCapacity'
+      MinCapacity: !Ref 'BaseWriteCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref RemMap
+          - index
+          - deployment_id-date_marker-index
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:index:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  RemMapIndexWriteScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: RemMapWriteScalingPolicy
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref RemMapIndexWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  RemMapReadCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxReadCapacity'
+      MinCapacity: !Ref 'BaseReadCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref RemMap
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:table:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  RemMapReadScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: RemMapIndexWriteScalingPolicy
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref RemMapReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+  RemMapIndexReadCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxReadCapacity'
+      MinCapacity: !Ref 'BaseReadCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref RemMap
+          - index
+          - deployment_id-date_marker-index
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:index:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  RemMapIndexReadScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: RemMapReadScalingPolicy
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref RemMapIndexReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+  ExpVul:
+    Type: "AWS::DynamoDB::Table"
+    DependsOn: RemMap
+    Properties:
+      TableName: !Join
+        - ''
+        - - !Ref 'ProjectName'
+          - '_'
+          - 'exp_vul_map'
+      AttributeDefinitions:
+        -
+          AttributeName: "vulnerability_id"
+          AttributeType: "S"
+        -
+          AttributeName: "vul_map_sort_key"
+          AttributeType: "S"
+        -
+          AttributeName: "deployment_id"
+          AttributeType: "S"
+        -
+          AttributeName: "date_marker"
+          AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "vulnerability_id"
+          KeyType: "HASH"
+        -
+          AttributeName: "vul_map_sort_key"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref 'BaseReadCapacity'
+        WriteCapacityUnits: !Ref 'BaseWriteCapacity'
+      SSESpecification:
+        SSEEnabled: !Ref 'AtRestEncryption'
+      TimeToLiveSpecification:
+        AttributeName: !Ref 'TTL'
+        Enabled: True
+      GlobalSecondaryIndexes:
+        -
+          IndexName: "deployment_id-date_marker-index"
+          KeySchema:
+            -
+              AttributeName: "deployment_id"
+              KeyType: "HASH"
+            -
+              AttributeName: "date_marker"
+              KeyType: "RANGE"
+          Projection:
+            ProjectionType: "KEYS_ONLY"
+          ProvisionedThroughput:
+            ReadCapacityUnits: !Ref 'BaseReadCapacity'
+            WriteCapacityUnits: !Ref 'BaseWriteCapacity'
+  ExpVulWriteCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxWriteCapacity'
+      MinCapacity: !Ref 'BaseWriteCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref ExpVul
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  ExpVulWriteScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: ExpVul
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ExpVulWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  ExpVulIndexWriteCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxWriteCapacity'
+      MinCapacity: !Ref 'BaseWriteCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref ExpVul
+          - index
+          - deployment_id-date_marker-index
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:index:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  ExpVulIndexWriteScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: ExpVulWriteScalingPolicy
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ExpVulIndexWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  ExpVulReadCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxReadCapacity'
+      MinCapacity: !Ref 'BaseReadCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref ExpVul
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:table:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  ExpVulReadScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: ExpVulIndexWriteScalingPolicy
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ExpVulReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+  ExpVulIndexReadCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxReadCapacity'
+      MinCapacity: !Ref 'BaseReadCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref ExpVul
+          - index
+          - deployment_id-date_marker-index
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:index:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  ExpVulIndexReadScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: ExpVulReadScalingPolicy
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ExpVulIndexReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+  VulKey:
+    Type: "AWS::DynamoDB::Table"
+    DependsOn: ExpVul
+    Properties:
+      TableName: !Join
+        - ''
+        - - !Ref 'ProjectName'
+          - '_'
+          - 'vul_key_map'
+      AttributeDefinitions:
+        -
+          AttributeName: "key"
+          AttributeType: "S"
+        -
+          AttributeName: "date_marker"
+          AttributeType: "S"
+        -
+          AttributeName: "deployment_id"
+          AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "key"
+          KeyType: "HASH"
+        -
+          AttributeName: "date_marker"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref 'BaseReadCapacity'
+        WriteCapacityUnits: !Ref 'BaseWriteCapacity'
+      SSESpecification:
+        SSEEnabled: !Ref 'AtRestEncryption'
+      TimeToLiveSpecification:
+        AttributeName: !Ref 'TTL'
+        Enabled: True
+      GlobalSecondaryIndexes:
+        -
+          IndexName: "deployment_id-date_marker-index"
+          KeySchema:
+            -
+              AttributeName: "deployment_id"
+              KeyType: "HASH"
+            -
+              AttributeName: "date_marker"
+              KeyType: "RANGE"
+          Projection:
+            ProjectionType: "KEYS_ONLY"
+          ProvisionedThroughput:
+            ReadCapacityUnits: !Ref 'BaseReadCapacity'
+            WriteCapacityUnits: !Ref 'BaseWriteCapacity'
+  VulKeyWriteCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxWriteCapacity'
+      MinCapacity: !Ref 'BaseWriteCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref VulKey
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  VulKeyWriteScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: VulKey
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref VulKeyWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  VulKeyIndexWriteCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxWriteCapacity'
+      MinCapacity: !Ref 'BaseWriteCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref VulKey
+          - index
+          - deployment_id-date_marker-index
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:index:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  VulKeyIndexWriteScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: VulKeyWriteScalingPolicy
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref VulKeyIndexWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  VulKeyReadCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxReadCapacity'
+      MinCapacity: !Ref 'BaseReadCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref VulKey
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:table:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  VulKeyReadScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: VulKeyIndexWriteScalingPolicy
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref VulKeyReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+  VulKeyIndexReadCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxReadCapacity'
+      MinCapacity: !Ref 'BaseReadCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref VulKey
+          - index
+          - deployment_id-date_marker-index
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:index:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  VulKeyIndexReadScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: VulKeyReadScalingPolicy
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref VulKeyIndexReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+  VulData:
+    Type: "AWS::DynamoDB::Table"
+    DependsOn: VulKey
+    Properties:
+      TableName: !Join
+        - ''
+        - - !Ref 'ProjectName'
+          - '_'
+          - 'vul_data'
+      AttributeDefinitions:
+        -
+          AttributeName: "id"
+          AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "id"
+          KeyType: "HASH"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref 'BaseReadCapacity'
+        WriteCapacityUnits: !Ref 'BaseWriteCapacity'
+      SSESpecification:
+        SSEEnabled: !Ref 'AtRestEncryption'
+      TimeToLiveSpecification:
+        AttributeName: !Ref 'TTL'
+        Enabled: True
+  VulDataWriteCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxWriteCapacity'
+      MinCapacity: !Ref 'BaseWriteCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref VulData
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  VulDataWriteScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: VulData
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref VulDataWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  VulDataReadCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxReadCapacity'
+      MinCapacity: !Ref 'BaseReadCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref VulData
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:table:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  VulDataReadScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: VulDataWriteScalingPolicy
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref VulDataReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+  VulKeyAdded:
+    Type: "AWS::DynamoDB::Table"
+    DependsOn: VulKey
+    Properties:
+      TableName: !Join
+        - ''
+        - - !Ref 'ProjectName'
+          - '_'
+          - 'vul_key_map_added'
+      AttributeDefinitions:
+        -
+          AttributeName: "vulnerability_id"
+          AttributeType: "S"
+        -
+          AttributeName: "vul_key_sort_key"
+          AttributeType: "S"
+        -
+          AttributeName: "date_marker"
+          AttributeType: "S"
+        -
+          AttributeName: "deployment_id"
+          AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "vulnerability_id"
+          KeyType: "HASH"
+        -
+          AttributeName: "vul_key_sort_key"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref 'BaseReadCapacity'
+        WriteCapacityUnits: !Ref 'BaseWriteCapacity'
+      SSESpecification:
+        SSEEnabled: !Ref 'AtRestEncryption'
+      TimeToLiveSpecification:
+        AttributeName: !Ref 'TTL'
+        Enabled: True
+      GlobalSecondaryIndexes:
+        -
+          IndexName: "deployment_id-date_marker-index"
+          KeySchema:
+            -
+              AttributeName: "deployment_id"
+              KeyType: "HASH"
+            -
+              AttributeName: "date_marker"
+              KeyType: "RANGE"
+          Projection:
+            ProjectionType: "KEYS_ONLY"
+          ProvisionedThroughput:
+            ReadCapacityUnits: !Ref 'BaseReadCapacity'
+            WriteCapacityUnits: !Ref 'BaseWriteCapacity'
+  VulKeyAddedWriteCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxWriteCapacity'
+      MinCapacity: !Ref 'BaseWriteCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref VulKeyAdded
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  VulKeyAddedWriteScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: VulKeyAdded
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref VulKeyAddedWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  VulKeyAddedIndexWriteCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxWriteCapacity'
+      MinCapacity: !Ref 'BaseWriteCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref VulKeyAdded
+          - index
+          - deployment_id-date_marker-index
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:index:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  VulKeyAddedIndexWriteScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: VulKeyAddedWriteScalingPolicy
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref VulKeyAddedIndexWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  VulKeyAddedReadCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxReadCapacity'
+      MinCapacity: !Ref 'BaseReadCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref VulKeyAdded
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:table:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  VulKeyAddedReadScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: VulKeyAddedIndexWriteScalingPolicy
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref VulKeyAddedReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+  VulKeyAddedIndexReadCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxReadCapacity'
+      MinCapacity: !Ref 'BaseReadCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref VulKeyAdded
+          - index
+          - deployment_id-date_marker-index
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:index:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  VulKeyAddedIndexReadScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: VulKeyAddedReadScalingPolicy
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref VulKeyAddedIndexReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+  VulKeyRemoved:
+    Type: "AWS::DynamoDB::Table"
+    DependsOn: VulKeyAdded
+    Properties:
+      TableName: !Join
+        - ''
+        - - !Ref 'ProjectName'
+          - '_'
+          - 'vul_key_map_removed'
+      AttributeDefinitions:
+        -
+          AttributeName: "vulnerability_id"
+          AttributeType: "S"
+        -
+          AttributeName: "vul_key_sort_key"
+          AttributeType: "S"
+        -
+          AttributeName: "date_marker"
+          AttributeType: "S"
+        -
+          AttributeName: "deployment_id"
+          AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "vulnerability_id"
+          KeyType: "HASH"
+        -
+          AttributeName: "vul_key_sort_key"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref 'BaseReadCapacity'
+        WriteCapacityUnits: !Ref 'BaseWriteCapacity'
+      SSESpecification:
+        SSEEnabled: !Ref 'AtRestEncryption'
+      TimeToLiveSpecification:
+        AttributeName: !Ref 'TTL'
+        Enabled: True
+      GlobalSecondaryIndexes:
+        -
+          IndexName: "deployment_id-date_marker-index"
+          KeySchema:
+            -
+              AttributeName: "deployment_id"
+              KeyType: "HASH"
+            -
+              AttributeName: "date_marker"
+              KeyType: "RANGE"
+          Projection:
+            ProjectionType: "KEYS_ONLY"
+          ProvisionedThroughput:
+            ReadCapacityUnits: !Ref 'BaseReadCapacity'
+            WriteCapacityUnits: !Ref 'BaseWriteCapacity'
+  VulKeyRemovedWriteCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxWriteCapacity'
+      MinCapacity: !Ref 'BaseWriteCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref VulKeyRemoved
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:table:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  VulKeyRemovedWriteScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: VulKeyRemoved
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref VulKeyRemovedWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  VulKeyRemovedIndexWriteCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxWriteCapacity'
+      MinCapacity: !Ref 'BaseWriteCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref VulKeyRemoved
+          - index
+          - deployment_id-date_marker-index
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:index:WriteCapacityUnits
+      ServiceNamespace: dynamodb
+  VulKeyRemovedIndexWriteScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: VulKeyRemovedWriteScalingPolicy
+    Properties:
+      PolicyName: WriteAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref VulKeyRemovedIndexWriteCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBWriteCapacityUtilization
+  VulKeyRemovedReadCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxReadCapacity'
+      MinCapacity: !Ref 'BaseReadCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref VulKeyRemoved
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:table:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  VulKeyRemovedReadScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: VulKeyRemovedIndexWriteScalingPolicy
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref VulKeyRemovedReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+  VulKeyRemovedIndexReadCapacityScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: !Ref 'MaxReadCapacity'
+      MinCapacity: !Ref 'BaseReadCapacity'
+      ResourceId: !Join
+        - /
+        - - table
+          - !Ref VulKeyRemoved
+          - index
+          - deployment_id-date_marker-index
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: dynamodb:index:ReadCapacityUnits
+      ServiceNamespace: dynamodb
+  VulKeyRemovedIndexReadScalingPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    DependsOn: VulKeyRemovedReadScalingPolicy
+    Properties:
+      PolicyName: ReadAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref VulKeyRemovedIndexReadCapacityScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        ScaleInCooldown: 180
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: DynamoDBReadCapacityUtilization
+Outputs:
+  StackName:
+    Description: Stack Name
+    Value: !Sub "${AWS::StackName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-StackName"
+  CIDMap:
+    Description: CID List Table
+    Value: !Ref CIDMap
+    Export:
+      Name: !Sub "${AWS::StackName}-CIDMap"
+  CheckInMap:
+    Description: Check in Table
+    Value: !Ref CheckInMap
+    Export:
+      Name: !Sub "${AWS::StackName}-CheckInMap"
+  EnvMap:
+    Description: Environment Table
+    Value: !Ref EnvMap
+    Export:
+      Name: !Sub "${AWS::StackName}-EnvMap"
+  RemMap:
+    Description: Remediation Table
+    Value: !Ref RemMap
+    Export:
+      Name: !Sub "${AWS::StackName}-RemMap"
+  ExpVul:
+    Description: Vulnerability Exposure Table
+    Value: !Ref ExpVul
+    Export:
+      Name: !Sub "${AWS::StackName}-ExpVul"
+  VulData:
+    Description: Vulnerability Database Table
+    Value: !Ref VulData
+    Export:
+      Name: !Sub "${AWS::StackName}-VulData"
+  VulKey:
+    Description: Vulnerability Table
+    Value: !Ref VulKey
+    Export:
+      Name: !Sub "${AWS::StackName}-VulKey"
+  VulKeyAdded:
+    Description: Added Vulnerability Table
+    Value: !Ref VulKeyAdded
+    Export:
+      Name: !Sub "${AWS::StackName}-VulKeyAdded"
+  VulKeyRemoved:
+    Description: Removed Vulnerability Table
+    Value: !Ref VulKeyRemoved
+    Export:
+      Name: !Sub "${AWS::StackName}-VulKeyRemoved"

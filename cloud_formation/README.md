@@ -1,5 +1,9 @@
 # Cloud Formation to deploy ci_vul_notification
 
+## Quick start
+Launch the stack from the provided link:
+https://s3-us-west-1.amazonaws.com/al-deployment-services.us-west-1/cloud_formations/ci_rr_launch.yaml
+
 ## Supported Region
 Currently this package only available in the following regions:
 

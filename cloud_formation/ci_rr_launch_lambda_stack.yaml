@@ -1,0 +1,759 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CFT to launch Cloud Insight Remediation Report resources
+Parameters:
+  pProjectName:
+    Description: Prefix name that will be used across all resource name
+    AllowedPattern: "^[A-Za-z][A-Za-z0-9_-]*$"
+    ConstraintDescription: Project name must only contain alpha numeric, - and _
+    Type: String
+  pDestS3Bucket:
+    Description: The S3 bucket name where you wish to store the output, leave it empty if you want to automatically create the S3 bucket
+    Type: String
+  pLambdaInvokeMode:
+    Description: Lambda Invoke Mode (Event / RequestResponse)
+    Type: String
+    AllowedValues: [Event, RequestResponse]
+    Default: 'Event'
+  pLambdaPackages:
+    Description: Lambda package which implement the report
+    Default: "ci_rr_lambda.zip"
+    Type: String
+  pSourceS3Bucket:
+    Description: >
+      The prefix of the S3 bucket which contains Lambda package. Note that the name of the bucket must contain a region name suffix. The following is the valid backet name syntax: <bucket_name_prefix>.us-east-1.
+    Default: "al-deployment-services"
+    Type: String
+  pDynamoDBStack:
+    Description: The DynamoDB stack for reference to import table name
+    Type: String
+Resources:
+  DeathLetterQueue:
+    Type: 'AWS::SQS::Queue'
+    Properties:
+      QueueName: !Sub "${AWS::StackName}-ci_rr_dlq"
+      MessageRetentionPeriod: 1209600
+
+  OutputSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Sub "${AWS::StackName}-ci_rr_sns"
+
+  LambdaKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: AL CI Remediation Report Lambda KMS Key
+      Enabled: 'true'
+      EnableKeyRotation: 'true'
+      KeyPolicy:
+        Version: '2012-10-17'
+        Id: key-default-1
+        Statement:
+        - Sid: Allow administration of the key
+          Effect: Allow
+          Principal:
+            AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+          Action: ['kms:Create*', 'kms:Describe*', 'kms:Enable*', 'kms:List*', 'kms:Put*',
+            'kms:Update*', 'kms:Revoke*', 'kms:Disable*', 'kms:Get*', 'kms:Delete*',
+            'kms:ScheduleKeyDeletion', 'kms:CancelKeyDeletion', 'kms:Decrypt', 'kms:Encrypt']
+          Resource: '*'
+
+  LambdaKMSKeyAlias:
+    Type: "AWS::KMS::Alias"
+    Properties:
+      AliasName: !Sub "alias/${AWS::StackName}-KMSKey"
+      TargetKeyId: !Ref LambdaKMSKey
+
+  MasterLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ci_rr_master-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [lambda.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: LambdaLogging
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource: '*'
+            Action: ['logs:*']
+            Effect: Allow
+      - PolicyName: DynamoDBAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource:
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-CIDMap'} ]]
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-EnvMap'} ]]
+            Action: [
+              "dynamodb:DeleteItem",
+              "dynamodb:GetItem",
+              "dynamodb:PutItem",
+              "dynamodb:Query",
+              "dynamodb:Scan",
+              "dynamodb:BatchWriteItem",
+              "dynamodb:UpdateItem"]
+            Effect: Allow
+      - PolicyName: InvokeLambda
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource:
+            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-ci_rr_collect_driver" ]]
+            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-ci_rr_monitor_worker" ]]
+            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-ci_rr_reporter_driver" ]]
+            Action: ['lambda:InvokeFunction']
+
+  MasterLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: CI Remediation Report Master Function
+      Runtime: python2.7
+      Handler: ci_rr_master.lambda_handler
+      Timeout: '120'
+      MemorySize: '128'
+      FunctionName: !Sub "${AWS::StackName}-ci_rr_master"
+      Code:
+        S3Bucket:
+          !Join
+            - '.'
+            - - !Ref 'pSourceS3Bucket'
+              - !Ref 'AWS::Region'
+        S3Key:
+          !Join
+            - '/'
+            - - 'lambda_packages'
+              - !Ref 'pLambdaPackages'
+      Role: !GetAtt [MasterLambdaRole, Arn]
+      Environment:
+        Variables:
+          COLLECT_DRIVER_INVOCATION: !Ref 'pLambdaInvokeMode'
+          COLLECT_DRIVER_NAME: !Ref 'CollectDriverLambda'
+          MONITOR_WORKER_INVOCATION: !Ref 'pLambdaInvokeMode'
+          MONITOR_WORKER_NAME: !Ref 'MonitorWorkerLambda'
+          REPORTER_DRIVER_INVOCATION: !Ref 'pLambdaInvokeMode'
+          REPORTER_DRIVER_NAME: !Ref 'ReporterDriverLambda'
+          DYNAMODB_CID_MAP_NAME: {"Fn::ImportValue" : {"Fn::Sub":"${pDynamoDBStack}-CIDMap"}}
+          DYNAMODB_ENV_MAP_NAME: {"Fn::ImportValue" : {"Fn::Sub":"${pDynamoDBStack}-EnvMap"}}
+          DYNAMODB_REGION: !Ref 'AWS::Region'
+
+  CollectDriverLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ci_rr_collect_driver-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [lambda.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: LambdaLogging
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource: '*'
+            Action: ['logs:*']
+            Effect: Allow
+      - PolicyName: DynamoDBAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource:
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-EnvMap'} ]]
+            Action: [
+              "dynamodb:DeleteItem",
+              "dynamodb:GetItem",
+              "dynamodb:PutItem",
+              "dynamodb:Query",
+              "dynamodb:Scan",
+              "dynamodb:BatchWriteItem",
+              "dynamodb:UpdateItem"]
+            Effect: Allow
+      - PolicyName: InvokeLambda
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource:
+            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-ci_rr_collect_worker" ]]
+            Action: ['lambda:InvokeFunction']
+      - PolicyName: WriteToDLQ
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource:
+            - !Join [':', ['arn:aws:sqs', !Ref 'AWS::Region', !Ref 'AWS::AccountId', !Sub "${AWS::StackName}-DeathLetterQueue" ]]
+            Action: [
+              "sqs:SendMessage",
+              "sqs:ReceiveMessage",
+              "sqs:GetQueueUrl"]
+
+  CollectDriverLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: CI Remediation Report Collect Driver Function
+      Runtime: python2.7
+      Handler: ci_rr_collect_driver.lambda_handler
+      Timeout: '300'
+      MemorySize: '128'
+      FunctionName: !Sub "${AWS::StackName}-ci_rr_collect_driver"
+      Code:
+        S3Bucket:
+          !Join
+            - '.'
+            - - !Ref 'pSourceS3Bucket'
+              - !Ref 'AWS::Region'
+        S3Key:
+          !Join
+            - '/'
+            - - 'lambda_packages'
+              - !Ref 'pLambdaPackages'
+      Role: !GetAtt [CollectDriverLambdaRole, Arn]
+      Environment:
+        Variables:
+          COLLECT_WORKER_INVOCATION: !Ref 'pLambdaInvokeMode'
+          COLLECT_WORKER_NAME: !Ref 'CollectWorkerLambda'
+          DYNAMODB_EXP_VUL_MAP_NAME: {"Fn::ImportValue" : {"Fn::Sub":"${pDynamoDBStack}-ExpVul"}}
+          DYNAMODB_REM_CHECK_IN_MAP_NAME: {"Fn::ImportValue" : {"Fn::Sub":"${pDynamoDBStack}-CheckInMap"}}
+          DYNAMODB_REM_MAP_NAME: {"Fn::ImportValue" : {"Fn::Sub":"${pDynamoDBStack}-RemMap"}}
+          DYNAMODB_VUL_KEY_MAP_NAME: {"Fn::ImportValue" : {"Fn::Sub":"${pDynamoDBStack}-VulKey"}}
+
+  CollectWorkerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ci_rr_collect_worker-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [lambda.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: LambdaLogging
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource: '*'
+            Action: ['logs:*']
+            Effect: Allow
+      - PolicyName: DynamoDBAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource:
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-RemMap'} ]]
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-ExpVul'} ]]
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-VulKey'} ]]
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-CheckInMap'} ]]
+            Action: [
+              "dynamodb:DeleteItem",
+              "dynamodb:GetItem",
+              "dynamodb:PutItem",
+              "dynamodb:Query",
+              "dynamodb:Scan",
+              "dynamodb:BatchWriteItem",
+              "dynamodb:UpdateItem"]
+            Effect: Allow
+      - PolicyName: UseKMSKey
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource: !GetAtt [LambdaKMSKey, Arn]
+            Action: ['kms:Encrypt', 'kms:Decrypt']
+      - PolicyName: WriteToDLQ
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource:
+            - !Join [':', ['arn:aws:sqs', !Ref 'AWS::Region', !Ref 'AWS::AccountId', !Sub "${AWS::StackName}-DeathLetterQueue" ]]
+            Action: [
+              "sqs:SendMessage",
+              "sqs:ReceiveMessage",
+              "sqs:GetQueueUrl"]
+
+  CollectWorkerLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: CI Remediation Report Collect Worker Function
+      Runtime: python2.7
+      Handler: ci_rr_collect_worker.lambda_handler
+      Timeout: '300'
+      MemorySize: '3008'
+      FunctionName: !Sub "${AWS::StackName}-ci_rr_collect_worker"
+      Code:
+        S3Bucket:
+          !Join
+            - '.'
+            - - !Ref 'pSourceS3Bucket'
+              - !Ref 'AWS::Region'
+        S3Key:
+          !Join
+            - '/'
+            - - 'lambda_packages'
+              - !Ref 'pLambdaPackages'
+      Role: !GetAtt [CollectWorkerLambdaRole, Arn]
+
+  MonitorWorkerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ci_rr_monitor_worker-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [lambda.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: LambdaLogging
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource: '*'
+            Action: ['logs:*']
+            Effect: Allow
+      - PolicyName: DynamoDBAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource:
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-EnvMap'} ]]
+            Action: [
+              "dynamodb:DeleteItem",
+              "dynamodb:GetItem",
+              "dynamodb:PutItem",
+              "dynamodb:Query",
+              "dynamodb:Scan",
+              "dynamodb:BatchWriteItem",
+              "dynamodb:UpdateItem"]
+            Effect: Allow
+      - PolicyName: UseKMSKey
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource: !GetAtt [LambdaKMSKey, Arn]
+            Action: ['kms:Encrypt', 'kms:Decrypt']
+      - PolicyName: WriteToDLQ
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource:
+            - !Join [':', ['arn:aws:sqs', !Ref 'AWS::Region', !Ref 'AWS::AccountId', !Sub "${AWS::StackName}-DeathLetterQueue" ]]
+            Action: [
+              "sqs:SendMessage",
+              "sqs:ReceiveMessage",
+              "sqs:GetQueueUrl"]
+
+  MonitorWorkerLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: CI Remediation Report Monitor Worker Function
+      Runtime: python2.7
+      Handler: ci_rr_monitor_worker.lambda_handler
+      Timeout: '300'
+      MemorySize: '256'
+      FunctionName: !Sub "${AWS::StackName}-ci_rr_monitor_worker"
+      Code:
+        S3Bucket:
+          !Join
+            - '.'
+            - - !Ref 'pSourceS3Bucket'
+              - !Ref 'AWS::Region'
+        S3Key:
+          !Join
+            - '/'
+            - - 'lambda_packages'
+              - !Ref 'pLambdaPackages'
+      Role: !GetAtt [MonitorWorkerLambdaRole, Arn]
+
+  ReporterDriverLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ci_rr_reporter_driver-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [lambda.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: LambdaLogging
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource: '*'
+            Action: ['logs:*']
+            Effect: Allow
+      - PolicyName: DynamoDBAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource:
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-EnvMap'} ]]
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-CheckInMap'} ]]
+            Action: [
+              "dynamodb:DeleteItem",
+              "dynamodb:GetItem",
+              "dynamodb:PutItem",
+              "dynamodb:Query",
+              "dynamodb:Scan",
+              "dynamodb:BatchWriteItem",
+              "dynamodb:UpdateItem"]
+            Effect: Allow
+      - PolicyName: InvokeLambda
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource:
+            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-ci_rr_reporter_worker" ]]
+            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-ci_rr_reporter_sender" ]]
+            Action: ['lambda:InvokeFunction']
+      - PolicyName: WriteToDLQ
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource:
+            - !Join [':', ['arn:aws:sqs', !Ref 'AWS::Region', !Ref 'AWS::AccountId', !Sub "${AWS::StackName}-DeathLetterQueue" ]]
+            Action: [
+              "sqs:SendMessage",
+              "sqs:ReceiveMessage",
+              "sqs:GetQueueUrl"]
+
+  ReporterDriverLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: CI Remediation Report Reporter Driver Function
+      Runtime: python2.7
+      Handler: ci_rr_reporter_driver.lambda_handler
+      Timeout: '300'
+      MemorySize: '256'
+      FunctionName: !Sub "${AWS::StackName}-ci_rr_reporter_driver"
+      Code:
+        S3Bucket:
+          !Join
+            - '.'
+            - - !Ref 'pSourceS3Bucket'
+              - !Ref 'AWS::Region'
+        S3Key:
+          !Join
+            - '/'
+            - - 'lambda_packages'
+              - !Ref 'pLambdaPackages'
+      Role: !GetAtt [ReporterDriverLambdaRole, Arn]
+      Environment:
+        Variables:
+          REPORTER_WORKER_INVOCATION: !Ref 'pLambdaInvokeMode'
+          REPORTER_WORKER_NAME: !Ref 'ReporterWorkerLambda'
+          REPORTER_SENDER_INVOCATION: !Ref 'pLambdaInvokeMode'
+          REPORTER_SENDER_NAME: !Ref 'ReporterSenderLambda'
+          DYNAMODB_REGION: !Ref 'AWS::Region'
+          DYNAMODB_INDEX_NAME: 'deployment_id-date_marker-index'
+          DYNAMODB_ENV_CHECKIN_MAP_NAME: {"Fn::ImportValue" : {"Fn::Sub":"${pDynamoDBStack}-CheckInMap"}}
+          DYNAMODB_REM_MAP_NAME: {"Fn::ImportValue" : {"Fn::Sub":"${pDynamoDBStack}-RemMap"}}
+          DYNAMODB_EXP_VUL_MAP_NAME: {"Fn::ImportValue" : {"Fn::Sub":"${pDynamoDBStack}-ExpVul"}}
+          DYNAMODB_VUL_KEY_MAP_NAME: {"Fn::ImportValue" : {"Fn::Sub":"${pDynamoDBStack}-VulKey"}}
+          DYNAMODB_VUL_KEY_MAP_ADD_NAME: {"Fn::ImportValue" : {"Fn::Sub":"${pDynamoDBStack}-VulKeyAdded"}}
+          DYNAMODB_VUL_KEY_MAP_RMV_NAME: {"Fn::ImportValue" : {"Fn::Sub":"${pDynamoDBStack}-VulKeyRemoved"}}
+          DYNAMODB_VUL_DATA_MAP_NAME: {"Fn::ImportValue" : {"Fn::Sub":"${pDynamoDBStack}-VulData"}}
+          DYNAMODB_VUL_DATA_MAP_TTL: '30'
+
+  ReporterWorkerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ci_rr_reporter_worker-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [lambda.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: LambdaLogging
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource: '*'
+            Action: ['logs:*']
+            Effect: Allow
+      - PolicyName: DynamoDBAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource:
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-RemMap'}, '*' ]]
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-ExpVul'}, '*' ]]
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-VulKey'}, '*' ]]
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-VulKeyAdded'}, '*' ]]
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-VulKeyRemoved'}, '*' ]]
+            Action: [
+              "dynamodb:DeleteItem",
+              "dynamodb:GetItem",
+              "dynamodb:PutItem",
+              "dynamodb:Query",
+              "dynamodb:Scan",
+              "dynamodb:BatchWriteItem",
+              "dynamodb:UpdateItem"]
+            Effect: Allow
+      - PolicyName: WriteToDLQ
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource: !GetAtt [DeathLetterQueue, Arn]
+            Action: [
+              "sqs:SendMessage",
+              "sqs:ReceiveMessage",
+              "sqs:GetQueueUrl"]
+      - PolicyName: PublishtoSNS
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource: !Ref 'OutputSNSTopic'
+            Action: ["sns:Publish"]
+      - PolicyName: WriteToS3
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource: !Join ['', ['arn:aws:s3:::', !Ref 'pDestS3Bucket', '/*']]
+            Action: ["s3:PutObject"]
+
+  ReporterWorkerLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: CI Remediation Report Reporter Worker Function
+      Runtime: python2.7
+      Handler: ci_rr_reporter_worker.lambda_handler
+      Timeout: '300'
+      MemorySize: '3008'
+      FunctionName: !Sub "${AWS::StackName}-ci_rr_reporter_worker"
+      Code:
+        S3Bucket:
+          !Join
+            - '.'
+            - - !Ref 'pSourceS3Bucket'
+              - !Ref 'AWS::Region'
+        S3Key:
+          !Join
+            - '/'
+            - - 'lambda_packages'
+              - !Ref 'pLambdaPackages'
+      Role: !GetAtt [ReporterWorkerLambdaRole, Arn]
+
+  ReporterSenderLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ci_rr_reporter_sender-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [lambda.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: LambdaLogging
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource: '*'
+            Action: ['logs:*']
+            Effect: Allow
+      - PolicyName: DynamoDBAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource:
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-VulKey'}, '*' ]]
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-VulKeyAdded'}, '*' ]]
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-VulKeyRemoved'}, '*' ]]
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-VulData'} ]]
+            Action: [
+              "dynamodb:DeleteItem",
+              "dynamodb:GetItem",
+              "dynamodb:PutItem",
+              "dynamodb:Query",
+              "dynamodb:Scan",
+              "dynamodb:BatchWriteItem",
+              "dynamodb:UpdateItem"]
+            Effect: Allow
+      - PolicyName: UseKMSKey
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource: !GetAtt [LambdaKMSKey, Arn]
+            Action: ['kms:Encrypt', 'kms:Decrypt']
+      - PolicyName: WriteToDLQ
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource: !GetAtt [DeathLetterQueue, Arn]
+            Action: [
+              "sqs:SendMessage",
+              "sqs:ReceiveMessage",
+              "sqs:GetQueueUrl"]
+      - PolicyName: PublishtoSNS
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource: !Ref 'OutputSNSTopic'
+            Action: ["sns:Publish"]
+      - PolicyName: WriteToS3
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource: !Join ['', ['arn:aws:s3:::', !Ref 'pDestS3Bucket', '/*']]
+            Action: ["s3:PutObject"]
+
+  ReporterSenderLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: CI Remediation Report Reporter Sender Function
+      Runtime: python2.7
+      Handler: ci_rr_reporter_sender.lambda_handler
+      Timeout: '300'
+      MemorySize: '3008'
+      FunctionName: !Sub "${AWS::StackName}-ci_rr_reporter_sender"
+      Code:
+        S3Bucket:
+          !Join
+            - '.'
+            - - !Ref 'pSourceS3Bucket'
+              - !Ref 'AWS::Region'
+        S3Key:
+          !Join
+            - '/'
+            - - 'lambda_packages'
+              - !Ref 'pLambdaPackages'
+      Role: !GetAtt [ReporterSenderLambdaRole, Arn]
+
+  InputLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ci_rr_input-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [lambda.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: LambdaLogging
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource: '*'
+            Action: ['logs:*']
+            Effect: Allow
+      - PolicyName: DynamoDBAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource:
+            - !Join ['', ['arn:aws:dynamodb', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', 'table/', "Fn::ImportValue" : {"Fn::Sub":'${pDynamoDBStack}-CIDMap'} ]]
+            Action: [
+              "dynamodb:DeleteItem",
+              "dynamodb:GetItem",
+              "dynamodb:PutItem",
+              "dynamodb:Query",
+              "dynamodb:Scan",
+              "dynamodb:BatchWriteItem",
+              "dynamodb:UpdateItem"]
+            Effect: Allow
+      - PolicyName: UseKMSKey
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource: !GetAtt [LambdaKMSKey, Arn]
+            Action: ['kms:Encrypt', 'kms:Decrypt']
+      - PolicyName: WriteToDLQ
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Resource: !GetAtt [DeathLetterQueue, Arn]
+            Action: [
+              "sqs:SendMessage",
+              "sqs:ReceiveMessage",
+              "sqs:GetQueueUrl"]
+
+  InputLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: CI Remediation Report CID Input Function
+      Runtime: python2.7
+      Handler: ci_rr_input.lambda_handler
+      Timeout: '60'
+      MemorySize: '128'
+      FunctionName: !Sub "${AWS::StackName}-ci_rr_input"
+      Code:
+        S3Bucket:
+          !Join
+            - '.'
+            - - !Ref 'pSourceS3Bucket'
+              - !Ref 'AWS::Region'
+        S3Key:
+          !Join
+            - '/'
+            - - 'lambda_packages'
+              - !Ref 'pLambdaPackages'
+      Role: !GetAtt [InputLambdaRole, Arn]
+      Environment:
+        Variables:
+          DYNAMODB_CID_MAP_NAME: {"Fn::ImportValue" : {"Fn::Sub":"${pDynamoDBStack}-CIDMap"}}
+          DYNAMODB_REGION: !Ref 'AWS::Region'
+          KMS_KEY: !GetAtt [LambdaKMSKey, Arn]
+
+Outputs:
+  StackName:
+    Description: Stack Name
+    Value: !Sub "${AWS::StackName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-StackName"
+  InputLambda:
+    Description: Lambda for integration to API Gateway
+    Value: !GetAtt [InputLambda, Arn]
+    Export:
+      Name: !Sub "${AWS::StackName}-InputLambda"
+  MasterLambda:
+    Description: Master Driver
+    Value: !GetAtt [MasterLambda, Arn]
+    Export:
+      Name: !Sub "${AWS::StackName}-MasterLambda"
+  OutputSNSTopic:
+    Description: SNS topic for output notification
+    Value: !Ref OutputSNSTopic
+    Export:
+      Name: !Sub "${AWS::StackName}-OutputSNSTopic"

@@ -1,0 +1,152 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CFT to launch Cloud Insight Remediation Report resources
+Parameters:
+  pLambdaStack:
+    Description: The Lambda stack for reference to import Lambda function name
+    Type: String
+Resources:
+  InputAPI:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      ApiKeySourceType: HEADER
+      Description: API for input to CI Remediation Report CID
+      Name: !Sub "${AWS::StackName}-ci_rr_input"
+
+  InputAPILambdaPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: lambda:invokeFunction
+      FunctionName: {"Fn::ImportValue" : {"Fn::Sub":'${pLambdaStack}-InputLambda'}}
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join ['', ['arn:aws:execute-api', ':', !Ref 'AWS::Region', ':', !Ref 'AWS::AccountId', ':', !Ref 'InputAPI', '/*' ]]
+
+  InputAPIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ci_rr_input_api-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [apigateway.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: APIGatewayLogging
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Resource: '*'
+            Action: ['logs:*']
+            Effect: Allow
+
+  InputAPIAccount:
+    Type: "AWS::ApiGateway::Account"
+    Properties:
+      CloudWatchRoleArn: !GetAtt [InputAPIRole, Arn]
+
+  InputAPIDeployment:
+    Type: "AWS::ApiGateway::Deployment"
+    DependsOn: InputAPICreateUpdatePost
+    Properties:
+      RestApiId: !Ref InputAPI
+      StageName: test
+
+  InputAPIStage:
+    Type: "AWS::ApiGateway::Stage"
+    DependsOn: InputAPIAccount
+    Properties:
+      DeploymentId: !Ref 'InputAPIDeployment'
+      MethodSettings:
+        -
+          DataTraceEnabled: true
+          HttpMethod: '*'
+          LoggingLevel: INFO
+          ResourcePath: '/*'
+      RestApiId: !Ref 'InputAPI'
+      StageName: v1
+
+  InputAPICreateUpdateResource:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      ParentId: !GetAtt [InputAPI, RootResourceId]
+      PathPart: 'register'
+      RestApiId: !Ref InputAPI
+
+  InputAPICreateUpdatePost:
+    Type: "AWS::ApiGateway::Method"
+    DependsOn: InputAPICreateUpdateResource
+    Properties:
+      ApiKeyRequired: true
+      AuthorizationType: 'NONE'
+      HttpMethod: 'POST'
+      Integration:
+        Type: 'AWS'
+        IntegrationHttpMethod: 'POST'
+        Uri: !Join ['', ['arn:aws:apigateway', ':', !Ref 'AWS::Region', ':', 'lambda:path/2015-03-31/functions/', {"Fn::ImportValue" : {"Fn::Sub":'${pLambdaStack}-InputLambda'}}, '/invocations' ]]
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+        - StatusCode: 200
+      ResourceId: !Ref 'InputAPICreateUpdateResource'
+      RestApiId: !Ref 'InputAPI'
+
+  APIUsagePlan:
+    Type: "AWS::ApiGateway::UsagePlan"
+    Properties:
+      ApiStages:
+      - ApiId: !Ref 'InputAPI'
+        Stage: !Ref 'InputAPIStage'
+      Description: Usage plan for CI Remediation Report
+      Quota:
+        Limit: 100
+        Period: DAY
+      Throttle:
+        BurstLimit: 10
+        RateLimit: 3
+      UsagePlanName: !Sub "${AWS::StackName}-ci_rr_input"
+
+  ApiKey:
+    Type: "AWS::ApiGateway::ApiKey"
+    DependsOn:
+      - "InputAPIDeployment"
+      - "InputAPI"
+      - "InputAPIStage"
+    Properties:
+      Name: !Sub "${AWS::StackName}-sample_api_key"
+      Description: "Sample API Key to access the API Gateway"
+      Enabled: "true"
+      StageKeys:
+        - RestApiId:
+            Ref: "InputAPI"
+          StageName: "v1"
+
+  APIUsagePlanKey:
+    Type: "AWS::ApiGateway::UsagePlanKey"
+    Properties :
+      KeyId: !Ref 'ApiKey'
+      KeyType: API_KEY
+      UsagePlanId: !Ref 'APIUsagePlan'
+
+Outputs:
+  StackName:
+    Description: Stack Name
+    Value: !Sub "${AWS::StackName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-StackName"
+  RegisterURL:
+    Description: Use this URL to register new CID
+    Value: !Join ['', ['https://', !Ref 'InputAPI', '.execute.api.', !Ref 'AWS::Region' , '.amazonaws.com/', !Ref 'InputAPIStage' ,'/register' ]]
+    Export:
+      Name: !Sub "${AWS::StackName}-RegisterURL"
+  APIUsagePlan:
+    Description: Please create API Key in this Usage Plan
+    Value: !Ref APIUsagePlan
+    Export:
+      Name: !Sub "${AWS::StackName}-APIUsagePlan"
+  APIKey:
+    Description: Go to AWS Console and copy the Key value from this API Key
+    Value: !Ref ApiKey
+    Export:
+      Name: !Sub "${AWS::StackName}-APIKey"

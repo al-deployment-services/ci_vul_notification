@@ -19,11 +19,9 @@ Use the [CFT template](/cloud_formation) to launch the solution. The master stac
 
 The Master lambda function will periodically query DynamoDB table called `CID Map` to find target CID to execute. By default this table will be empty and you need to fill it with CID info.
 
-From the Master CFT stack, grab the output `SNS topic` and `S3 bucket` value. The `S3 bucket` will store result from all checks and the `SNS topic` can be use to subscribe to the notification.
+From the master CFT stack, grab the output `SNS topic` and `S3 bucket` value. The `S3 bucket` will store result from all checks and the `SNS topic` can be use to subscribe to the notification.
 
-From the API Gateway CFT stack, identify the `API Gateway Usage Plan` resource name. Create new API Key inside the API Gateway Usage Plan.
-
-From the API Gateway CFT stack, grab the `RegisterURL` and use it to make POST request to register new Customer ID (CID) into `CID Map` table.
+From the master CFT stack, grab the output `APIKey` and `RegisterURL`, use it to make POST request to register new Customer ID (CID) into `CID Map` table.
 
 ### Sample POST:
 ```
@@ -53,7 +51,7 @@ curl -X POST -d @payload.json -H "Content-Type: application/json" -H "Accept: ap
   "source": "aws.apigateway"
 }
 ```
-
+### Notification
 If you want to receive notification, subscribe to the SNS Topic either via email end points or other prefered method. You can also download the results in text file from the S3 bucket.
 
 ## Contributing

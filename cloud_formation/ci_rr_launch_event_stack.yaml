@@ -1,0 +1,118 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CFT to launch event rule for Cloud Insight Remediation Report
+Parameters:
+  pLambdaStack:
+    Description: The Lambda stack for reference to import Lambda function name
+    Type: String
+  pFrequency:
+    Description: How often the check should run (specify in hours)
+    Default: 24
+    Type: String
+Resources:
+  MasterLambdaInvocationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - events.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: ExecuteMasterLambda
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action: ['lambda:InvokeFunction']
+            Effect: Allow
+            Resource: {"Fn::ImportValue" : {"Fn::Sub":'${pLambdaStack}-MasterLambda'}}
+
+  MasterLambdaCollectorPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: {"Fn::ImportValue" : {"Fn::Sub":'${pLambdaStack}-MasterLambda'}}
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt MasterLambdaCollectorScheduledEvent.Arn
+      Action: lambda:invokeFunction
+
+  MasterLambdaCollectorScheduledEvent:
+    Type: "AWS::Events::Rule"
+    Properties:
+      Description: !Sub "Execute the ${pLambdaStack}-InputLambda on a scheduled basis"
+      RoleArn: !GetAtt MasterLambdaInvocationRole.Arn
+      ScheduleExpression: !Sub
+        - rate(${frequency} hours)
+        - { frequency: !Ref pFrequency }
+      State: ENABLED
+      Targets:
+        - Arn: {"Fn::ImportValue" : {"Fn::Sub":'${pLambdaStack}-MasterLambda'}}
+          Id: TargetFunction
+          Input: '{"source": "aws.event","driver": "collector","parent_cid": "ALL","log_level": "info"}'
+
+  MasterLambdaMonitorPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: {"Fn::ImportValue" : {"Fn::Sub":'${pLambdaStack}-MasterLambda'}}
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt MasterLambdaMonitorScheduledEvent.Arn
+      Action: lambda:invokeFunction
+
+  MasterLambdaMonitorScheduledEvent:
+    Type: "AWS::Events::Rule"
+    Properties:
+      Description: !Sub "Execute the ${pLambdaStack}-InputLambda on a scheduled basis"
+      RoleArn: !GetAtt MasterLambdaInvocationRole.Arn
+      ScheduleExpression: "rate(1 day)"
+      State: ENABLED
+      Targets:
+        - Arn: {"Fn::ImportValue" : {"Fn::Sub":'${pLambdaStack}-MasterLambda'}}
+          Id: TargetFunction
+          Input: '{"source": "aws.event","driver": "monitor","parent_cid": "ALL","log_level": "info"}'
+
+  MasterLambdaReporterPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: {"Fn::ImportValue" : {"Fn::Sub":'${pLambdaStack}-MasterLambda'}}
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt MasterLambdaReporterScheduledEvent.Arn
+      Action: lambda:invokeFunction
+
+  MasterLambdaReporterScheduledEvent:
+    Type: "AWS::Events::Rule"
+    Properties:
+      Description: !Sub "Execute the ${pLambdaStack}-InputLambda on a scheduled basis"
+      RoleArn: !GetAtt MasterLambdaInvocationRole.Arn
+      ScheduleExpression: !Sub
+        - rate(${frequency} hours)
+        - { frequency: !Ref pFrequency }
+      State: ENABLED
+      Targets:
+        - Arn: {"Fn::ImportValue" : {"Fn::Sub":'${pLambdaStack}-MasterLambda'}}
+          Id: TargetFunction
+          Input: '{"source": "aws.event","driver": "reporter","parent_cid": "ALL","log_level": "info"}'
+
+  MasterLambdaSenderPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: {"Fn::ImportValue" : {"Fn::Sub":'${pLambdaStack}-MasterLambda'}}
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt MasterLambdaSenderScheduledEvent.Arn
+      Action: lambda:invokeFunction
+
+  MasterLambdaSenderScheduledEvent:
+    Type: "AWS::Events::Rule"
+    Properties:
+      Description: !Sub "Execute the ${pLambdaStack}-InputLambda on a scheduled basis"
+      RoleArn: !GetAtt MasterLambdaInvocationRole.Arn
+      ScheduleExpression: !Sub
+        - rate(${frequency} hours)
+        - { frequency: !Ref pFrequency }
+      State: ENABLED
+      Targets:
+        - Arn: {"Fn::ImportValue" : {"Fn::Sub":'${pLambdaStack}-MasterLambda'}}
+          Id: TargetFunction
+          Input: '{"source": "aws.event","driver": "sender","parent_cid": "ALL","log_level": "info"}'
