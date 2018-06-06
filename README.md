@@ -54,6 +54,53 @@ curl -X POST -d @payload.json -H "Content-Type: application/json" -H "Accept: ap
 ### Notification
 If you want to receive notification, subscribe to the SNS Topic either via email end points or other prefered method. You can also download the results in text file from the S3 bucket.
 
+### Manual Test
+You can create test event on the master lambda function in order to trigger it to run specific events. All events are driven from `[master-stack-name]-ci_rr_master` lambda function. Here are some sample test event that you can generate and invoke manually:
+
+#### Monitor
+Trigger the function to scan all Customer ID (CID) and find all Cloud Insight deployment and register it. This is the pre-requisite before further scan/check can run.
+```
+{
+  "source": "aws.event",
+  "driver": "monitor",
+  "parent_cid": "ALL",
+  "log_level": "info"
+}
+```
+
+#### Collector
+Trigger the function to scan all Cloud Insight deployment and record the vulnerability state. There must be at minimum two separate Collector events runs before comparison can be performed. Modify the value for `parent_cid` if you want to trigger collection for specific CID.
+```
+{
+  "source": "aws.event",
+  "driver": "collector",
+  "parent_cid": "ALL",
+  "log_level": "info"
+}
+```
+
+#### Reporter
+Trigger the function to scan all Cloud Insight deployment and compare the vulnerability state from the last 2 Collector runs. There must be at minimum two separate Collector events runs before comparison can be performed. Modify the value for `parent_cid` if you want to trigger comparison for specific CID.
+```
+{
+  "source": "aws.event",
+  "driver": "reporter",
+  "parent_cid": "ALL",
+  "log_level": "info"
+}
+```
+
+#### Sender
+Trigger the function to scan all Cloud Insight deployment and send the comparison result to either S3 or SNS. There must be at minimum one Reporter event runs before Sender can be performed. Modify the value for `parent_cid` if you want to trigger sender for specific CID.
+```
+{
+  "source": "aws.event",
+  "driver": "sender",
+  "parent_cid": "ALL",
+  "log_level": "info"
+}
+```
+
 ## Contributing
 This sample will be provided AS IS with no long term support, please provide PR to contribute.
 
