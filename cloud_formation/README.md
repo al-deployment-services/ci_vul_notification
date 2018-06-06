@@ -4,6 +4,9 @@
 Launch the stack from the provided link:
 https://s3-us-west-1.amazonaws.com/al-deployment-services.us-west-1/cloud_formations/ci_rr_launch.yaml
 
+## Lambda Invocation Type
+For stability and resiliency, use `Event` as the invocation type. All error will be sent over to DLQ, look for resource with logicalID `DeathLetterQueue` in the Lambda stack. In  smaller AWS environment, you can use `RequestResponse` if you want to closely monitor the status.
+
 ## Supported Region
 Currently this package only available in the following regions:
 
