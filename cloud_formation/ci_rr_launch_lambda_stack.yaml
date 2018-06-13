@@ -66,7 +66,7 @@ Resources:
   MasterLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-ci_rr_master-role"
+      RoleName: !Sub "${AWS::StackName}-master"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -105,9 +105,9 @@ Resources:
           Statement:
           - Effect: Allow
             Resource:
-            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-ci_rr_collect_driver" ]]
-            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-ci_rr_monitor_worker" ]]
-            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-ci_rr_reporter_driver" ]]
+            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-collect_driver" ]]
+            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-monitor_worker" ]]
+            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-reporter_driver" ]]
             Action: ['lambda:InvokeFunction']
 
   MasterLambda:
@@ -118,7 +118,7 @@ Resources:
       Handler: ci_rr_master.lambda_handler
       Timeout: '120'
       MemorySize: '128'
-      FunctionName: !Sub "${AWS::StackName}-ci_rr_master"
+      FunctionName: !Sub "${AWS::StackName}-master"
       Code:
         S3Bucket:
           !Join
@@ -146,7 +146,7 @@ Resources:
   CollectDriverLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-ci_rr_collect_driver-role"
+      RoleName: !Sub "${AWS::StackName}-collect_driver"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -184,7 +184,7 @@ Resources:
           Statement:
           - Effect: Allow
             Resource:
-            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-ci_rr_collect_worker" ]]
+            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-collect_worker" ]]
             Action: ['lambda:InvokeFunction']
       - PolicyName: WriteToDLQ
         PolicyDocument:
@@ -206,7 +206,7 @@ Resources:
       Handler: ci_rr_collect_driver.lambda_handler
       Timeout: '300'
       MemorySize: '128'
-      FunctionName: !Sub "${AWS::StackName}-ci_rr_collect_driver"
+      FunctionName: !Sub "${AWS::StackName}-collect_driver"
       Code:
         S3Bucket:
           !Join
@@ -231,7 +231,7 @@ Resources:
   CollectWorkerLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-ci_rr_collect_worker-role"
+      RoleName: !Sub "${AWS::StackName}-collect_worker"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -293,7 +293,7 @@ Resources:
       Handler: ci_rr_collect_worker.lambda_handler
       Timeout: '300'
       MemorySize: '3008'
-      FunctionName: !Sub "${AWS::StackName}-ci_rr_collect_worker"
+      FunctionName: !Sub "${AWS::StackName}-collect_worker"
       Code:
         S3Bucket:
           !Join
@@ -310,7 +310,7 @@ Resources:
   MonitorWorkerLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-ci_rr_monitor_worker-role"
+      RoleName: !Sub "${AWS::StackName}-monitor_worker"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -369,7 +369,7 @@ Resources:
       Handler: ci_rr_monitor_worker.lambda_handler
       Timeout: '300'
       MemorySize: '256'
-      FunctionName: !Sub "${AWS::StackName}-ci_rr_monitor_worker"
+      FunctionName: !Sub "${AWS::StackName}-monitor_worker"
       Code:
         S3Bucket:
           !Join
@@ -386,7 +386,7 @@ Resources:
   ReporterDriverLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-ci_rr_reporter_driver-role"
+      RoleName: !Sub "${AWS::StackName}-reporter_driver"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -425,8 +425,8 @@ Resources:
           Statement:
           - Effect: Allow
             Resource:
-            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-ci_rr_reporter_worker" ]]
-            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-ci_rr_reporter_sender" ]]
+            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-reporter_worker" ]]
+            - !Join [':', ['arn:aws:lambda', !Ref 'AWS::Region', !Ref 'AWS::AccountId', 'function', !Sub "${AWS::StackName}-reporter_sender" ]]
             Action: ['lambda:InvokeFunction']
       - PolicyName: WriteToDLQ
         PolicyDocument:
@@ -448,7 +448,7 @@ Resources:
       Handler: ci_rr_reporter_driver.lambda_handler
       Timeout: '300'
       MemorySize: '256'
-      FunctionName: !Sub "${AWS::StackName}-ci_rr_reporter_driver"
+      FunctionName: !Sub "${AWS::StackName}-reporter_driver"
       Code:
         S3Bucket:
           !Join
@@ -481,7 +481,7 @@ Resources:
   ReporterWorkerLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-ci_rr_reporter_worker-role"
+      RoleName: !Sub "${AWS::StackName}-reporter_worker"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -550,7 +550,7 @@ Resources:
       Handler: ci_rr_reporter_worker.lambda_handler
       Timeout: '300'
       MemorySize: '3008'
-      FunctionName: !Sub "${AWS::StackName}-ci_rr_reporter_worker"
+      FunctionName: !Sub "${AWS::StackName}-reporter_worker"
       Code:
         S3Bucket:
           !Join
@@ -567,7 +567,7 @@ Resources:
   ReporterSenderLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-ci_rr_reporter_sender-role"
+      RoleName: !Sub "${AWS::StackName}-reporter_sender"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -642,7 +642,7 @@ Resources:
       Handler: ci_rr_reporter_sender.lambda_handler
       Timeout: '300'
       MemorySize: '3008'
-      FunctionName: !Sub "${AWS::StackName}-ci_rr_reporter_sender"
+      FunctionName: !Sub "${AWS::StackName}-reporter_sender"
       Code:
         S3Bucket:
           !Join
@@ -659,7 +659,7 @@ Resources:
   InputLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-ci_rr_input-role"
+      RoleName: !Sub "${AWS::StackName}-input"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -717,7 +717,7 @@ Resources:
       Handler: ci_rr_input.lambda_handler
       Timeout: '60'
       MemorySize: '128'
-      FunctionName: !Sub "${AWS::StackName}-ci_rr_input"
+      FunctionName: !Sub "${AWS::StackName}-input"
       Code:
         S3Bucket:
           !Join

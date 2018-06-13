@@ -23,7 +23,7 @@ Resources:
   InputAPIRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-ci_rr_input_api-role"
+      RoleName: !Sub "${AWS::StackName}-input_api"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:

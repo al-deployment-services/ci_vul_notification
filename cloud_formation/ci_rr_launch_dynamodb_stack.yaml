@@ -129,7 +129,7 @@ Resources:
   ScalingRole:
     Type: "AWS::IAM::Role"
     Properties:
-      RoleName: !Sub "${AWS::StackName}-auto_scaling-role"
+      RoleName: !Sub "${AWS::StackName}-asg"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
