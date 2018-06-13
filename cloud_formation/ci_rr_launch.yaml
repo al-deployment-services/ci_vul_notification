@@ -5,6 +5,7 @@ Parameters:
     Description: Prefix name that will be used across all resource name
     AllowedPattern: "^[A-Za-z][A-Za-z0-9_-]*$"
     ConstraintDescription: Project name must only contain alpha numeric, - and _
+    MaxLength: 40
     Type: String
   pFrequency:
     Description: How often the check should run (specify in hours)
@@ -178,6 +179,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     Properties:
       Parameters:
+        pProjectName: !Ref pProjectName
         pLambdaStack: !GetAtt [LambdaStack, Outputs.StackName]
       TemplateURL: !Join
         - ''
@@ -190,6 +192,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     Properties:
       Parameters:
+        pProjectName: !Ref pProjectName
         pLambdaStack: !GetAtt [LambdaStack, Outputs.StackName]
         pFrequency: !Ref pFrequency
       TemplateURL: !Join
