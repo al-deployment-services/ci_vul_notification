@@ -1,6 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: CFT to launch Cloud Insight Remediation Report resources
 Parameters:
+  pProjectName:
+    Description: Prefix name that will be used across all resource name
+    AllowedPattern: "^[A-Za-z][A-Za-z0-9_-]*$"
+    ConstraintDescription: Project name must only contain alpha numeric, - and _
+    Type: String
   pLambdaStack:
     Description: The Lambda stack for reference to import Lambda function name
     Type: String
@@ -23,7 +28,9 @@ Resources:
   InputAPIRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-ci_rr_input_api-role"
+      RoleName: !Sub
+        - ${ProjectName}-input_api
+        - { ProjectName: !Ref pProjectName}
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
