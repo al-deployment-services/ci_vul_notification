@@ -144,7 +144,7 @@ Outputs:
       Name: !Sub "${AWS::StackName}-StackName"
   RegisterURL:
     Description: Use this URL to register new CID
-    Value: !Join ['', ['https://', !Ref 'InputAPI', '.execute.api.', !Ref 'AWS::Region' , '.amazonaws.com/', !Ref 'InputAPIStage' ,'/register' ]]
+    Value: !Join ['', ['https://', !Ref 'InputAPI', '.execute-api.', !Ref 'AWS::Region' , '.amazonaws.com/', !Ref 'InputAPIStage' ,'/register' ]]
     Export:
       Name: !Sub "${AWS::StackName}-RegisterURL"
   APIUsagePlan:
