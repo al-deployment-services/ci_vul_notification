@@ -10,9 +10,11 @@ import argparse
 def authenticate(url, user, password):
     r = requests.post('https://{0}/aims/v1/authenticate'.format(url), auth=(user, password), verify=False)
     if r.status_code != 200:
-        sys.exit("Unable to authenticate %s" % (r.status_code))
-    token = r.json()['authentication']['token']
-    return token
+        print("Unable to authenticate %s" % (r.status_code))
+        return False
+    else:
+        token = r.json()['authentication']['token']
+        return token
 
 def get_level(l):
     if l == "debug":
